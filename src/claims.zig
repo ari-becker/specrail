@@ -85,18 +85,22 @@ pub fn conflict(file: *const spec.SpecFile, index: usize, assignee: []const u8, 
     return null;
 }
 
-/// The entries of a metadata block, from the lines between its fences;
-/// null when they are not valid TOML.
+/// The entries of the metadata block `m` of `file`, from the lines between its
+/// fences as the parser reads them, joined by `newline`; null when they are
+/// not valid TOML. A value read with a carriage return the parser drops from
+/// the end of a line would keep it, and written back, it would join the line
+/// ending and change the value.
 fn blockEntries(
     arena: Allocator,
-    inner: []const []const u8,
+    file: *const spec.SpecFile,
+    m: spec.Metadata,
     newline: []const u8,
 ) Allocator.Error!?[]const toml.Entry {
     var text: std.ArrayList(u8) = .empty;
     errdefer text.deinit(arena);
-    for (inner, 0..) |l, k| {
+    for (file.lines[m.line .. m.close_line - 1], 0..) |l, k| {
         if (k > 0) try text.appendSlice(arena, newline);
-        try text.appendSlice(arena, rewrite.body(l));
+        try text.appendSlice(arena, l);
     }
     // The entries point into the text, so it stays allocated.
     const owned = try text.toOwnedSlice(arena);
@@ -137,8 +141,7 @@ pub fn withClaim(
         start = m.line - 1;
         end = m.close_line;
         last_ending = rewrite.ending(lines[m.close_line - 1]);
-        const entries = (try blockEntries(arena, lines[m.line .. m.close_line - 1], newline)) orelse
-            return null;
+        const entries = (try blockEntries(arena, file, m, newline)) orelse return null;
         for (entries) |e| {
             if (!isClaimKey(e.key)) try kept.append(arena, .{ .key = e.key, .value = e.text });
         }
@@ -245,7 +248,7 @@ fn skeleton(
             try out.append(arena, .{ .line = i + 1, .text = lines[i] });
             continue;
         };
-        const entries = (try blockEntries(arena, lines[m.line .. m.close_line - 1], "\n")) orelse {
+        const entries = (try blockEntries(arena, file, m, "\n")) orelse {
             try out.append(arena, .{ .line = i + 1, .text = lines[i] });
             continue;
         };
@@ -465,6 +468,34 @@ test "a released block stays, empty, when a --- line below it would become the s
         try testing.expectEqualStrings(c[1], released);
         const accepted = try checkChange(arena, "specs/a.spec.md", with_claim, released, rules);
         try testing.expectEqual(@as(?[]const u8, null), accepted);
+    }
+}
+
+// specrail: specs/cli/claim.spec.md § 1.1 Claim commit
+// specrail: specs/cli/claim.spec.md § 2.1 Release commit
+// specrail: specs/cli/hook.spec.md § 1.1 Definition
+test "the hook accepts a claim on a value whose lines end in carriage returns" {
+    // Found by fuzzing: the claim kept a carriage return at the end of a line
+    // inside the value, which the parser drops. Written back before the line
+    // ending, it became part of a CRLF ending, the value changed, and the hook
+    // refused the claim.
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const claim: Claim = .{ .assignee = "agent-7", .until = "2026-11-17T02:00:00Z" };
+    const rules: Rules = .{ .now = 20774 * 86400 };
+    const contents = [_][]const u8{
+        "# § 1 One\n```toml\ndependencies = [\n\r\r\n]\n```\nIt MUST work.\n",
+        "# § 1 One\n```toml\nx = [\n  1,\r\r\r\n]\n```\nIt MUST work.\n",
+        "# § 1 One\r\n```toml\r\nx = [\r\n  1,\r\r\n]\r\n```\r\nIt MUST work.\r\n",
+    };
+    for (contents) |content| {
+        const held = try claimed(arena, content, 0, claim);
+        const claiming = try checkChange(arena, "specs/a.spec.md", content, held, rules);
+        try testing.expectEqual(@as(?[]const u8, null), claiming);
+        const released = try claimed(arena, held, 0, null);
+        const releasing = try checkChange(arena, "specs/a.spec.md", held, released, rules);
+        try testing.expectEqual(@as(?[]const u8, null), releasing);
     }
 }
 

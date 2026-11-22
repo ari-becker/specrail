@@ -248,13 +248,17 @@ const Formatter = struct {
         fences: []const []const u8,
         rest: []const []const u8,
     ) Allocator.Error!void {
-        const lines = fences[1 .. fences.len - 1];
+        const m = f.file().sections[si].metadata.?;
+        // The lines between the fences as the parser reads them: a carriage
+        // return it drops from the end of a line, if kept in a value, would
+        // join the line ending once written, and change the value.
+        const lines = f.file().lines[m.line .. m.close_line - 1];
         const last_ending = rewrite.ending(fences[fences.len - 1]);
         var text: std.ArrayList(u8) = .empty;
         defer text.deinit(f.arena);
         for (lines, 0..) |l, k| {
             if (k > 0) try text.appendSlice(f.arena, f.newline);
-            try text.appendSlice(f.arena, rewrite.body(l));
+            try text.appendSlice(f.arena, l);
         }
         const doc = switch (try toml.parse(f.arena, text.items)) {
             .ok => |d| d,
@@ -929,6 +933,24 @@ test "formatting formatted files changes nothing" {
     var second = try formatTest(&tidy, &tidy_sources, null);
     defer second.deinit();
     try testing.expectEqual(@as(usize, 0), second.outcome.changes.len);
+}
+
+// specrail: specs/cli/fmt.spec.md § 4.4 Idempotence
+test "a value whose lines end in carriage returns is formatted once" {
+    // A carriage return the parser drops from the end of a line inside the
+    // value, if kept, joins the line ending when written, and changes the
+    // value the next run reads.
+    const contents = [_][]const u8{
+        "# § 1 One\n```toml\nx = [\n\r\r\n]\n```\n\nIt MUST work.\n",
+        "# § 1 One\n```toml\nx = [\n  1,\r\r\r\n]\n```\n\nIt MUST work.\n",
+    };
+    for (contents) |content| {
+        var first = try formatTest(&one(content), &.{}, null);
+        defer first.deinit();
+        var second = try formatTest(&one(first.after("specs/t.spec.md").?), &.{}, null);
+        defer second.deinit();
+        try second.expectUnchanged("specs/t.spec.md");
+    }
 }
 
 // specrail: specs/cli/fmt.spec.md § 4.5 Unparseable files
