@@ -1,0 +1,83 @@
+name: Release
+
+# A tag v<version> publishes the Debian packages of its commit as a GitHub
+# release, which install.sh downloads. Run by hand, the workflow builds and
+# tries the packages without publishing them.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Actions are pinned to commits, with the release each one is in a comment.
+# setup-zig installs the minimum_zig_version that build.zig.zon names.
+
+jobs:
+  package:
+    name: Package (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
+      - name: Check the tag against build.zig.zon
+        run: |
+          version=$(sed -n 's/^    \.version = "\(.*\)",$/\1/p' build.zig.zon)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::the tag is $GITHUB_REF_NAME, but build.zig.zon has version $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >>"$GITHUB_ENV"
+      # The tests, built as the package is, then specrail check on this
+      # repository.
+      - run: zig build test -Doptimize=ReleaseSafe --summary all
+      - run: tools/package-deb.sh "$ARCH"
+      # install.sh installs the package on Debian 13 from a copy of the
+      # release, laid out as GitHub lays it out.
+      - name: Install the package on Debian 13
+        run: |
+          releases=$RUNNER_TEMP/releases
+          mkdir -p "$releases/download/v$VERSION"
+          cp dist/* "$releases/download/v$VERSION/"
+          docker run --rm -v "$releases:/releases:ro" -v "$PWD/install.sh:/install.sh:ro" \
+            -e SPECRAIL_RELEASES=file:///releases debian:trixie-slim sh -ec '
+              sh /install.sh "$1"
+              cd "$(mktemp -d)" && git init -q && specrail init && specrail check
+            ' sh "$VERSION"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: deb-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: Release
+    if: github.event_name == 'push'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: deb-*
+          merge-multiple: true
+          path: dist
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "specrail ${GITHUB_REF_NAME#v}" --generate-notes

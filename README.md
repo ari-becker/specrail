@@ -68,12 +68,30 @@ section itself, its dependencies and the tests that already verify it.
 
 ## Installing
 
-specrail is a single binary. It needs `git` at run time, and Zig 0.17.1 to
-build:
+specrail is a single binary, and it needs `git` at run time.
+
+On Debian 13, or a system based on it, [`install.sh`](install.sh) installs
+the Debian package from a
+[release](https://github.com/ari-becker/specrail/releases), for amd64 or
+arm64, and git with it. In the Dockerfile of an image for CI:
+
+```dockerfile
+FROM debian:trixie-slim
+ARG SPECRAIL_VERSION=0.1.0
+ADD https://raw.githubusercontent.com/ari-becker/specrail/v${SPECRAIL_VERSION}/install.sh /tmp/install-specrail.sh
+RUN sh /tmp/install-specrail.sh "$SPECRAIL_VERSION" \
+ && rm -rf /tmp/install-specrail.sh /var/lib/apt/lists/*
+```
+
+The script runs as root, and runs `apt-get update`, hence the `rm`. It
+installs curl first when the image has none, and the latest release when it
+is given no version.
+
+Elsewhere, build it with Zig 0.17.1:
 
 ```sh
-git clone https://github.com/ari-becker/SpecRail.git
-cd SpecRail
+git clone https://github.com/ari-becker/specrail.git
+cd specrail
 zig build -Doptimize=ReleaseSafe --prefix ~/.local
 ```
 
@@ -221,6 +239,12 @@ night, just inside the 6 hours GitHub allows a job, and for a quarter of an
 hour on every pull request. Each job starts from the inputs its fuzz test
 found the night before, with a seed no other job has had, and keeps any
 input that fails as an artifact to replay.
+
+To release, set `.version` in `build.zig.zon` and push the tag `v<version>`
+of that commit. The Release workflow runs the tests on amd64 and arm64,
+builds a Debian package for each with `tools/package-deb.sh`, installs it
+with `install.sh` on Debian 13, and publishes the packages as a release. Run
+by hand, it does all of that but publish.
 
 ## License
 

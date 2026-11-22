@@ -7,3 +7,6 @@ zig-pkg/
 tests/lsp/.venv/
 __pycache__/
 .pytest_cache/
+
+# Debian packages that tools/package-deb.sh builds.
+dist/
