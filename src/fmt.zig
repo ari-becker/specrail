@@ -100,15 +100,11 @@ fn allBlank(lines: []const []const u8) bool {
     return true;
 }
 
-fn isSeparatorLine(line: []const u8) bool {
-    return spec.isSeparator(rewrite.body(line));
-}
-
-/// Whether `lines` hold anything but blank lines and the `---` lines fmt
-/// drops.
+/// Whether `lines`, as `SpecFile.lines` holds them, hold anything but blank
+/// lines and the `---` lines fmt drops.
 fn contentBefore(lines: []const []const u8, dropped: Dropped) bool {
     for (lines, 0..) |l, i| {
-        const gone = i >= dropped.start and i < dropped.end and isSeparatorLine(l);
+        const gone = i >= dropped.start and i < dropped.end and spec.isSeparator(l);
         if (!gone and !allBlank(lines[i .. i + 1])) return true;
     }
     return false;
@@ -124,12 +120,16 @@ const Dropped = struct {
 /// nothing but blank lines before it, the separator and every `---` line
 /// after it up to the first other content. Dropping only the separator would
 /// make the next `---` line the separator, with nothing before it either, and
-/// fmt would not be idempotent.
-fn droppedSeparators(raw: []const []const u8, separator: ?usize) Dropped {
+/// fmt would not be idempotent. `lines` are as `SpecFile.lines` holds them,
+/// so that a `---` line is judged as the parser judged it, without the
+/// carriage returns it takes off.
+fn droppedSeparators(lines: []const []const u8, separator: ?usize) Dropped {
     const sep = separator orelse return .{ .start = 0, .end = 0 };
-    if (!allBlank(raw[0..sep])) return .{ .start = 0, .end = 0 };
+    if (!allBlank(lines[0..sep])) return .{ .start = 0, .end = 0 };
     var end = sep;
-    while (end < raw.len and (allBlank(raw[end .. end + 1]) or isSeparatorLine(raw[end]))) end += 1;
+    while (end < lines.len) : (end += 1) {
+        if (!allBlank(lines[end .. end + 1]) and !spec.isSeparator(lines[end])) break;
+    }
     return .{ .start = sep, .end = end };
 }
 
@@ -176,22 +176,24 @@ const Formatter = struct {
     /// The whole file, from its lines.
     fn format(f: *Formatter, raw: []const []const u8) Allocator.Error![]const u8 {
         const secs = f.file().sections;
+        // The lines as the parser read them, to judge them as it did.
+        const texts = f.file().lines;
         const heading_of = try f.arena.alloc(?usize, raw.len);
         defer f.arena.free(heading_of);
         @memset(heading_of, null);
         for (secs, 0..) |s, i| heading_of[s.line - 1] = i;
         const first: ?usize = if (secs.len > 0) secs[0].line - 1 else null;
         const separator = f.file().separator;
-        var dropped = droppedSeparators(raw, separator);
+        var dropped = droppedSeparators(texts, separator);
         if (try f.promotesSeparator(raw, dropped)) dropped = .{ .start = 0, .end = 0 };
         // Whether a separator is missing is decided after dropping one, which
         // can leave content before the first section.
         const kept = separator != null and dropped.start == dropped.end;
         const add_separator = !kept and first != null and
-            contentBefore(raw[0..first.?], dropped);
+            contentBefore(texts[0..first.?], dropped);
         var i: usize = 0;
         while (i < raw.len) : (i += 1) {
-            if (i >= dropped.start and i < dropped.end and isSeparatorLine(raw[i])) continue;
+            if (i >= dropped.start and i < dropped.end and spec.isSeparator(texts[i])) continue;
             const si = heading_of[i] orelse {
                 try f.out.appendSlice(f.arena, raw[i]);
                 continue;
@@ -228,8 +230,8 @@ const Formatter = struct {
         if (dropped.start == dropped.end) return false;
         var text: std.ArrayList(u8) = .empty;
         defer text.deinit(f.arena);
-        for (raw, 0..) |l, i| {
-            const gone = i >= dropped.start and i < dropped.end and isSeparatorLine(l);
+        for (raw, f.file().lines, 0..) |l, t, i| {
+            const gone = i >= dropped.start and i < dropped.end and spec.isSeparator(t);
             if (!gone) try text.appendSlice(f.arena, l);
         }
         var found: diag.List = .empty;
@@ -624,6 +626,21 @@ test "a separator with nothing before it is removed" {
     );
     defer f.deinit();
     try f.expectAfter("specs/t.spec.md", "\n\n# § 1 One\n\nIt MUST work.\n");
+}
+
+// specrail: specs/cli/fmt.spec.md § 1.3 Empty context
+test "a separator ending in carriage returns, with nothing before it, is removed" {
+    // The parser takes every carriage return off the end of a line, so it
+    // reads ---\r\r as a --- line, and fmt must too.
+    const cases = [_]struct { []const u8, []const u8 }{
+        .{ "\n---\r\r\n\n# § 1 One\n\nIt MUST work.\n", "\n\n# § 1 One\n\nIt MUST work.\n" },
+        .{ "\n---\n---\r\r\n\n# § 1 One\n\nIt MUST work.\n", "\n\n# § 1 One\n\nIt MUST work.\n" },
+    };
+    for (cases) |c| {
+        var f = try formatTest(&one(c[0]), &.{}, null);
+        defer f.deinit();
+        try f.expectAfter("specs/t.spec.md", c[1]);
+    }
 }
 
 // specrail: specs/cli/fmt.spec.md § 1.4 Section sign
