@@ -93,9 +93,11 @@ const Renamer = struct {
     }
 };
 
+/// Whether `lines`, as `SpecFile.lines` holds them, are all blank, as the
+/// parser judges them: a carriage return left inside a line is content.
 fn allBlank(lines: []const []const u8) bool {
     for (lines) |l| {
-        if (std.mem.trim(u8, l, " \t\r\n").len > 0) return false;
+        if (!spec.isBlank(l)) return false;
     }
     return true;
 }
@@ -105,7 +107,7 @@ fn allBlank(lines: []const []const u8) bool {
 fn contentBefore(lines: []const []const u8, dropped: Dropped) bool {
     for (lines, 0..) |l, i| {
         const gone = i >= dropped.start and i < dropped.end and spec.isSeparator(l);
-        if (!gone and !allBlank(lines[i .. i + 1])) return true;
+        if (!gone and !spec.isBlank(l)) return true;
     }
     return false;
 }
@@ -128,7 +130,7 @@ fn droppedSeparators(lines: []const []const u8, separator: ?usize) Dropped {
     if (!allBlank(lines[0..sep])) return .{ .start = 0, .end = 0 };
     var end = sep;
     while (end < lines.len) : (end += 1) {
-        if (!allBlank(lines[end .. end + 1]) and !spec.isSeparator(lines[end])) break;
+        if (!spec.isBlank(lines[end]) and !spec.isSeparator(lines[end])) break;
     }
     return .{ .start = sep, .end = end };
 }
@@ -641,6 +643,19 @@ test "a separator ending in carriage returns, with nothing before it, is removed
         defer f.deinit();
         try f.expectAfter("specs/t.spec.md", c[1]);
     }
+}
+
+// specrail: specs/cli/fmt.spec.md § 1.2 Missing separator
+// specrail: specs/cli/fmt.spec.md § 1.3 Empty context
+test "a line with a carriage return inside it is content before the separator" {
+    // The parser takes carriage returns off only the end of a line, so to it
+    // a line of a carriage return and a space is not blank.
+    var kept = try formatTest(&one("\r \n\n---\n# § 1 One\n\nIt MUST work.\n"), &.{}, null);
+    defer kept.deinit();
+    try kept.expectUnchanged("specs/t.spec.md");
+    var added = try formatTest(&one("\r \n# § 1 One\n\nIt MUST work.\n"), &.{}, null);
+    defer added.deinit();
+    try added.expectAfter("specs/t.spec.md", "\r \n\n---\n# § 1 One\n\nIt MUST work.\n");
 }
 
 // specrail: specs/cli/fmt.spec.md § 1.4 Section sign
