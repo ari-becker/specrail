@@ -45,7 +45,8 @@ jobs:
       - run: zig build test -Doptimize=ReleaseSafe --summary all
       - run: tools/package-deb.sh "$ARCH"
       # install.sh installs the package on Debian 13 from a copy of the
-      # release, laid out as GitHub lays it out.
+      # release, laid out as GitHub lays it out, and the specrail it installs
+      # has the version build.zig.zon names.
       - name: Install the package on Debian 13
         run: |
           releases=$RUNNER_TEMP/releases
@@ -54,6 +55,8 @@ jobs:
           docker run --rm -v "$releases:/releases:ro" -v "$PWD/install.sh:/install.sh:ro" \
             -e SPECRAIL_RELEASES=file:///releases debian:trixie-slim sh -ec '
               sh /install.sh "$1"
+              installed=$(specrail --version)
+              [ "$installed" = "$1" ] || { echo "specrail --version printed $installed" >&2; exit 1; }
               cd "$(mktemp -d)" && git init -q && specrail init && specrail check
             ' sh "$VERSION"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

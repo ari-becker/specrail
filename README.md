@@ -85,7 +85,7 @@ RUN sh /tmp/install-specrail.sh "$SPECRAIL_VERSION" \
 
 The script runs as root, and runs `apt-get update`, hence the `rm`. It
 installs curl first when the image has none, and the latest release when it
-is given no version.
+is given no version. `specrail --version` prints the version installed.
 
 Elsewhere, build it with Zig 0.17.1:
 

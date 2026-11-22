@@ -73,6 +73,11 @@ argument, specrail MUST print the problem to stderr with a hint to run
 `specrail <command> --help`, or `specrail --help` when the command itself is
 missing or unknown, and exit with status 2.
 
+## § 1.3 Version
+
+`specrail --version` MUST print to stdout the version that `build.zig.zon`
+names, alone on a line, and exit with status 0.
+
 # § 2 Color
 
 Color helps a person scan diagnostics in a terminal. Anywhere else, escape

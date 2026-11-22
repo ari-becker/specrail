@@ -3,6 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
+const build_options = @import("build_options");
 const check = @import("check.zig");
 const claim_command = @import("claim.zig");
 const context = @import("context.zig");
@@ -94,6 +95,7 @@ fn writeHelp(w: *Io.Writer) Io.Writer.Error!void {
         \\Options:
         \\  --color=<when>   Color diagnostics: auto (default), always or never
         \\  --help           Show this help
+        \\  --version        Show the version
         \\
         \\Run 'specrail <command> --help' for a command's usage.
         \\
@@ -149,6 +151,10 @@ fn runArgs(ctx: *Ctx, argv: []const []const u8) !u8 {
     const cmd = args.items[0];
     if (isHelp(cmd)) {
         try writeHelp(ctx.stdout);
+        return 0;
+    }
+    if (std.mem.eql(u8, cmd, "--version")) {
+        try ctx.stdout.print("{s}\n", .{build_options.version});
         return 0;
     }
     if (std.mem.startsWith(u8, cmd, "-")) {
@@ -357,6 +363,19 @@ test "usage errors go to stderr with a hint and exit with status 2" {
         try testing.expectEqual(@as(u8, 2), o.code);
         try testing.expectEqualStrings("", o.stdout);
         try sandbox.expectContains(o.stderr, case.hint);
+    }
+}
+
+// specrail: specs/cli.spec.md § 1.3 Version
+test "--version prints the version build.zig.zon names, alone on a line" {
+    var s = try sandbox.Sandbox.init();
+    defer s.deinit();
+    try testing.expect(build_options.version.len > 0);
+    for ([_][]const []const u8{ &.{"--version"}, &.{ "--color=never", "--version" } }) |args| {
+        const o = try s.runAtRoot(args);
+        try testing.expectEqual(@as(u8, 0), o.code);
+        try testing.expectEqualStrings(build_options.version ++ "\n", o.stdout);
+        try testing.expectEqualStrings("", o.stderr);
     }
 }
 

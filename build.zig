@@ -4,6 +4,9 @@ const std = @import("std");
 
 const zlinter = @import("zlinter");
 
+/// The version `specrail --version` prints.
+const version = @import("build.zig.zon").version;
+
 /// Defines the install, run, test, test-lint-rules, lint and test-lsp steps.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -28,6 +31,7 @@ pub fn build(b: *std.Build) void {
         "Replay this fuzz input, relative to the project root, in every fuzz test",
     );
     options.addOption(?[]const u8, "fuzz_input", fuzz_input);
+    options.addOption([]const u8, "version", version);
     exe.root_module.addOptions("build_options", options);
 
     const run_cmd = b.addRunArtifact(exe);
