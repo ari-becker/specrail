@@ -48,7 +48,9 @@ specrail MUST count a commit as a claim commit exactly when it has one parent,
 changes only spec files, and each changed spec file differs from its version
 in the parent only in metadata blocks whose keys and values, other than
 `assigned` and `assigned-until`, are unchanged. A block MAY be added or
-removed when it holds only those two keys.
+removed when it holds only those two keys. Each changed spec file MUST also
+keep the same sections, with the same numbers and titles in the same order,
+which a block's removal could change without changing any other line.
 
 ## § 1.2 Valid expiry
 

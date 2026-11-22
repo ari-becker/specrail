@@ -244,7 +244,7 @@ fn splitLines(arena: Allocator, content: []const u8) Allocator.Error![]Line {
             line.fence_open = true;
             line.fence_info = f.info;
             fence = f;
-        } else if (std.mem.trim(u8, text, " \t").len == 0) {
+        } else if (isBlank(text)) {
             line.kind = .blank;
         } else if (headingLevel(text)) |lvl| {
             line.kind = .heading;
@@ -256,7 +256,13 @@ fn splitLines(arena: Allocator, content: []const u8) Allocator.Error![]Line {
     return lines.toOwnedSlice(arena);
 }
 
-/// Whether `text`, a line without its ending, is a `---` line.
+/// Whether `text`, a line as `SpecFile.lines` holds it, is blank outside a
+/// fenced code block.
+pub fn isBlank(text: []const u8) bool {
+    return std.mem.trim(u8, text, " \t").len == 0;
+}
+
+/// Whether `text`, a line as `SpecFile.lines` holds it, is a `---` line.
 pub fn isSeparator(text: []const u8) bool {
     return std.mem.startsWith(u8, text, "---") and std.mem.trim(u8, text[3..], " \t").len == 0;
 }

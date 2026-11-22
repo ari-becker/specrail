@@ -153,7 +153,7 @@ pub fn withClaim(
     // section's metadata block, or a `---` line below it the separator.
     const keep_empty = s.metadata != null and
         (spec.tomlBlockFollows(lines[end..]) or
-            promotesSeparator(file, lines, .{ .start = start, .end = end }));
+            promotesSeparator(file, .{ .start = start, .end = end }));
     const block = if (kept.items.len == 0 and keep_empty)
         try arena.print("```toml{s}```{s}", .{ newline, closing })
     else
@@ -172,17 +172,13 @@ pub fn withClaim(
 
 /// Whether removing `block`, the lines of a metadata block, would put a `---`
 /// line right below a blank one in a file without a separator. That line
-/// would become the separator, and the sections above it context.
-fn promotesSeparator(
-    file: *const spec.SpecFile,
-    lines: []const []const u8,
-    block: spec.Range,
-) bool {
+/// would become the separator, and the sections above it context. The lines
+/// are judged as the parser reads them, without their trailing `\r`s.
+fn promotesSeparator(file: *const spec.SpecFile, block: spec.Range) bool {
+    const lines = file.lines;
     if (file.separator != null or block.end >= lines.len) return false;
     // A heading comes before the block, so it never starts on the first line.
-    const above = rewrite.body(lines[block.start - 1]);
-    const below = rewrite.body(lines[block.end]);
-    return std.mem.trim(u8, above, " \t").len == 0 and spec.isSeparator(below);
+    return spec.isBlank(lines[block.start - 1]) and spec.isSeparator(lines[block.end]);
 }
 
 /// A metadata block in fmt's canonical form: the known keys in fmt's order,
@@ -311,6 +307,13 @@ pub fn checkChange(
         const msg = "changes {s}:{d}, beyond assigned and assigned-until";
         return try arena.print(msg, .{ path, line });
     }
+    // The same lines can still read as other sections, such as when a `---`
+    // comes to follow a blank line and turns the sections above it into
+    // context.
+    if (!sameSections(old.sections, new.sections)) {
+        const msg = "changes which sections {s} has, beyond assigned and assigned-until";
+        return try arena.print(msg, .{path});
+    }
     for (old.sections, new.sections, 0..) |o, n, i| {
         const holds: Holds = .{ .old = holdOf(o), .new = holdOf(n) };
         if (try checkSection(arena, &new, i, holds, rules)) |why| {
@@ -320,6 +323,17 @@ pub fn checkChange(
         }
     }
     return null;
+}
+
+/// Whether `a` and `b` are the same sections, by number and title, in the
+/// same order.
+fn sameSections(a: []const spec.Section, b: []const spec.Section) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| {
+        if (!std.mem.eql(u8, x.number, y.number)) return false;
+        if (!std.mem.eql(u8, x.title, y.title)) return false;
+    }
+    return true;
 }
 
 /// A section's hold before and after a change.
@@ -422,11 +436,19 @@ test "a released block stays, empty, when a --- line below it would become the s
     const arena = arena_state.allocator();
     const claim: Claim = .{ .assignee = "agent-7", .until = "2026-11-17T02:00:00Z" };
     const rules: Rules = .{ .now = 20774 * 86400 };
-    const content = "# § 1 One\n\n```toml\n```\n---\nIt MUST work.\n";
-    const held = try claimed(arena, content, 0, claim);
-    try testing.expectEqualStrings(content, try claimed(arena, held, 0, null));
-    const why = try checkChange(arena, "specs/a.spec.md", held, content, rules);
-    try testing.expectEqual(@as(?[]const u8, null), why);
+    // Found by fuzzing too: a line of only carriage returns is blank, and
+    // `---` and carriage returns a separator, as the parser reads them.
+    const kept = [_][]const u8{
+        "# § 1 One\n\n```toml\n```\n---\nIt MUST work.\n",
+        "# § 1 One\n\r\r\n```toml\n```\n---\nIt MUST work.\n",
+        "# § 1 One\n \t\n```toml\n```\n---\r\r\nIt MUST work.\n",
+    };
+    for (kept) |content| {
+        const held = try claimed(arena, content, 0, claim);
+        try testing.expectEqualStrings(content, try claimed(arena, held, 0, null));
+        const why = try checkChange(arena, "specs/a.spec.md", held, content, rules);
+        try testing.expectEqual(@as(?[]const u8, null), why);
+    }
     // Otherwise the block goes: below a separator, the --- is a line of
     // prose, and without the blank line or the ---, no line becomes one.
     const cases = [_]struct { []const u8, []const u8 }{
@@ -444,6 +466,26 @@ test "a released block stays, empty, when a --- line below it would become the s
         const accepted = try checkChange(arena, "specs/a.spec.md", with_claim, released, rules);
         try testing.expectEqual(@as(?[]const u8, null), accepted);
     }
+}
+
+// specrail: specs/cli/hook.spec.md § 1.1 Definition
+test "the hook refuses a change that keeps every line but not every section" {
+    // Found by fuzzing: removing the block makes the --- the separator, and
+    // § 1 context. The lines are the same, so the hook compared the sections
+    // one by one, and crashed on lists of different lengths.
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const held =
+        "# § 1 One\n\n```toml\nassigned       = \"agent-7\"\n" ++
+        "assigned-until = 2026-11-17T02:00:00Z\n```\n---\n# § 2 Two\n\nIt MUST work.\n";
+    const released = "# § 1 One\n\n---\n# § 2 Two\n\nIt MUST work.\n";
+    const rules: Rules = .{ .now = 20774 * 86400 };
+    const why = (try checkChange(arena, "specs/a.spec.md", held, released, rules)).?;
+    try testing.expectEqualStrings(
+        "changes which sections specs/a.spec.md has, beyond assigned and assigned-until",
+        why,
+    );
 }
 
 test "a claim is written as a canonical metadata block, and removed without a trace" {
