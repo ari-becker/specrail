@@ -68,6 +68,12 @@ fn isHeading(line: []const u8) bool {
     return t.len > 0 and t[0] == '#' and signed;
 }
 
+/// `line`, with its ending, without the blanks around it, and without every
+/// carriage return at its end, which the parser takes off too.
+fn trimmed(line: []const u8) []const u8 {
+    return std.mem.trim(u8, std.mem.trimEnd(u8, line, "\r\n"), " \t");
+}
+
 /// Whether line `index` of `lines` lies in the `dependencies` value of a
 /// metadata block. The lines are read as written, since a block being edited
 /// may not parse.
@@ -77,14 +83,14 @@ fn inDependencies(lines: []const []const u8, index: usize) bool {
     // Each step moves one line up, so the loop ends at the top of the file.
     while (i > 0) {
         i -= 1;
-        const l = std.mem.trim(u8, rewrite.body(lines[i]), " \t");
+        const l = trimmed(lines[i]);
         if (std.mem.startsWith(u8, l, "```")) {
             if (!std.mem.eql(u8, l, "```toml") or dependencies != true) return false;
             // The block is a metadata block: the first thing after a heading.
             var above = i;
             while (above > 0) {
                 above -= 1;
-                const prev = std.mem.trim(u8, rewrite.body(lines[above]), " \t");
+                const prev = trimmed(lines[above]);
                 if (prev.len > 0) return isHeading(prev);
             }
             return false;
@@ -217,10 +223,31 @@ test "a dependency entry is found by the lines above it, even unparsed" {
     try std.testing.expectEqual(@as(?usize, null), entryStart("  \"specs/a.spec.md § 1 One\","));
 }
 
+test "a dependency entry is found past lines that end in carriage returns" {
+    // The parser takes every carriage return off the end of a line, so to it
+    // ```toml\r\r opens a metadata block, and \r\r is a blank line.
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const cases = [_]struct { []const u8, usize }{
+        .{ "# § 1 Waits\n```toml\r\r\ndependencies = [\n  \"specs/a.spec.md § 1\n", 3 },
+        .{ "# § 1 Waits\n\r\r\n```toml\ndependencies = [\n  \"specs/a.spec.md § 1\n", 4 },
+    };
+    for (cases) |c| {
+        const whole = try std.mem.concat(arena, u8, &.{ c[0], "\",\n]\n```\nIt MUST wait.\n" });
+        var found: diag.List = .empty;
+        const file = try spec.parse(arena, "specs/b.spec.md", whole, &found);
+        try std.testing.expect(file.sections[0].metadata != null);
+        const lines = try rewrite.splitLines(arena, c[0]);
+        try std.testing.expect(inDependencies(lines, c[1]));
+    }
+}
+
 // ---------------------------------------------------------------- fuzz tests
 
 const testing = std.testing;
 
+const diag = @import("diag.zig");
 const edit = @import("edit.zig");
 const fuzzing = @import("fuzzing.zig");
 const project = @import("project.zig");
